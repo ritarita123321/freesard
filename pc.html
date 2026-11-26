@@ -162,7 +162,7 @@ async function grab() {
   if (!vw) return null;
   var sx = vw * $('left').value / 100, sy = vh * $('top').value / 100;
   var sw = Math.min(vw - sx, vw * $('w').value / 100), sh = Math.min(vh - sy, vh * $('h').value / 100);
-  var scale = Math.min(1, 1400 / sw);
+  var scale = Math.min(1, 1100 / sw);
   lastCrop = { sy: sy, sx: sx, scale: scale, vh: vh, vw: vw };
   dbg.width = Math.round(sw * scale); dbg.height = Math.round(sh * scale);
   var ctx = dbg.getContext('2d', { willReadFrequently: true });
@@ -175,10 +175,12 @@ async function grab() {
   }
   ctx.putImageData(img, 0, 0);
   dbg_w = vw; dbg_h = vh;
-  return dbg;
+  var cp = document.createElement('canvas'); cp.width = dbg.width; cp.height = dbg.height; cp.getContext('2d').drawImage(dbg, 0, 0);
+  return cp;
 }
 
-var dbg_w = 0, dbg_h = 0, seqN = 0, lastCrop = null;
+var dbg_w = 0, dbg_h = 0, seqN = 0, lastCrop = null, inflight = 0, workers = [], rr = 0;
+function pickWorker() { if (!workers.length) return worker; rr = (rr + 1) % workers.length; return workers[rr]; }
 var fsW = null, fsCb = null;
 function fsTimer(cb, ms) {
   fsCb = cb;
@@ -198,7 +200,7 @@ function recog(c) {
       return { data: { text: r.text || '', lines: ls, confidence: 100, engine: 'paddle' } };
     }).catch(function (e) { dbgSend({ pocrRunErr: String(e && e.message || e) }); window.__pocr = null; return worker.recognize(c); });
   }
-  return worker.recognize(c);
+  return pickWorker().recognize(c);
 }
 function loadPaddle() {
   if (window.__pocr || window.__pocrLoading) return;
@@ -215,8 +217,8 @@ function loadPaddle() {
 function tick() {
   if (!running) return;
   fsTimer(tick, +$('every').value);
-  if (busy || !worker) return;
-  busy = true;
+  if (inflight >= Math.max(1, workers.length) || !worker) return;
+  inflight++;
   grab().then(function (c) { return c ? recog(c) : null; }).then(function (res) {
     if (!res) { dbgSend({ noframe: 1, vw: video.videoWidth, ic: !!window.__ic }); return; }
     dbgSend({ eng: res.data.engine || 'tess', ocr: (res.data.text || '').slice(0, 200), w: dbg_w, h: dbg_h, box: [$('top').value, $('h').value, $('left').value, $('w').value, $('thr').value] });
@@ -231,7 +233,7 @@ function tick() {
       return;
     }
     lastSeen = Date.now();
-    var stable = sim(n, prevFrame) > 0.85; prevFrame = n;
+    var stable = true; prevFrame = n;
     if (!stable || sim(n, lastSent) > 0.8) return;
     lastSent = n;
     $('en').textContent = text;
@@ -241,7 +243,7 @@ function tick() {
       $('ar').textContent = ar; send({ t: ar, pos: $('posMode').value !== 'off' ? pos : null, pm: $('posMode').value });
     }).catch(function (e) { status('⚠️ الترجمة: ' + e.message); });
   }).catch(function (e) { status('⚠️ OCR: ' + e.message); })
-    .then(function () { busy = false; });
+    .then(function () { inflight--; });
 }
 
 $('go').onclick = function () {
@@ -264,7 +266,7 @@ $('go').onclick = function () {
     Tesseract.createWorker('eng').then(function (w) {
       worker = w;
       return w.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?\'-:;()$%&" });
-    }).then(function () { status('✅ جاهز'); }).catch(function (e) { status('⚠️ ' + e.message); });
+    }).then(function () { status('✅ جاهز'); workers.push(worker); [1, 2].forEach(function () { Tesseract.createWorker('eng').then(function (w2) { return w2.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?\'-:;()$%&" }).then(function () { workers.push(w2); dbgSend({ workers: workers.length }); }); }).catch(function () {}); }); }).catch(function (e) { status('⚠️ ' + e.message); });
   }
   tick();
 };
