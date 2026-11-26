@@ -59,7 +59,7 @@
   document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
 
   function setState(s) {
-    if (s === 'online') tvdbg({ up: '0.2.0', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
+    if (s === 'online') tvdbg({ up: '0.2.1', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
@@ -68,10 +68,16 @@
   var sty = parseInt(store('fs_style') || '0', 10) || 0;
   document.body.className = 's' + sty;
   var sz = store('fs_size'); if (sz) subtext.style.fontSize = sz + 'px';
+  var bgw = store('fs_bgw'); bgw = bgw === null ? null : +bgw; if (bgw !== null) subtext.style.minWidth = bgw + 'px';
+  var pd = store('fs_pad'); if (pd !== null) subtext.style.paddingTop = subtext.style.paddingBottom = pd + 'px';
+  var xoff = +(store('fs_x') || 0); sub.style.transform = 'translateX(' + xoff + 'px)';
   function applyCfg(o) {
     if (o.style != null) { sty = +o.style; store('fs_style', sty); document.body.className = 's' + sty; }
     if (o.bottom != null) { bottom = +o.bottom; sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); }
     if (o.size) { subtext.style.fontSize = (+o.size) + 'px'; store('fs_size', o.size); }
+    if (o.bgw != null) { bgw = +o.bgw; store('fs_bgw', bgw); subtext.style.minWidth = bgw + 'px'; }
+    if (o.pad != null) { store('fs_pad', o.pad); subtext.style.paddingTop = subtext.style.paddingBottom = (+o.pad) + 'px'; }
+    if (o.x != null) { xoff = +o.x; store('fs_x', xoff); sub.style.transform = 'translateX(' + xoff + 'px)'; }
   }
   var RECTS = [['0px', '0px', '1920px', '1080px'], ['480px', '270px', '960px', '540px']];
   function showVideo(srcEl) {
@@ -117,8 +123,8 @@
       var d; try { d = JSON.parse(msg); } catch (e) { d = { t: msg }; }
       if (d.hello) { setState('📱 التلفون اتصل!'); return; }
       if (d.cfg) { applyCfg(d.cfg); if (d.t === undefined) return; }
-      if (d.t && d.pos && d.pos.length >= 2) { sub.style.bottom = Math.max(0, Math.round((1 - d.pos[1]) * 1080) - 16) + 'px'; subtext.style.minHeight = Math.max(0, Math.round((d.pos[1] - d.pos[0]) * 1080)) + 'px'; if (d.pos.length === 4) { sub.style.left = Math.max(0, Math.round(d.pos[2] * 1920) - 50) + 'px'; sub.style.right = Math.max(0, Math.round((1 - d.pos[3]) * 1920) - 50) + 'px'; subtext.style.minWidth = '100%'; subtext.style.boxSizing = 'border-box'; } }
-      else if (d.t) { sub.style.bottom = bottom + 'px'; subtext.style.minHeight = ''; sub.style.left = ''; sub.style.right = ''; subtext.style.minWidth = ''; }
+      if (d.t && d.pos && d.pos.length >= 2) { sub.style.bottom = Math.max(0, Math.round((1 - d.pos[1]) * 1080) - 16) + 'px'; subtext.style.minHeight = Math.max(0, Math.round((d.pos[1] - d.pos[0]) * 1080)) + 'px'; if (d.pos.length === 4) { sub.style.left = Math.max(0, Math.round(d.pos[2] * 1920) - 50) + 'px'; sub.style.right = Math.max(0, Math.round((1 - d.pos[3]) * 1920) - 50) + 'px'; subtext.style.minWidth = '100%'; subtext.style.boxSizing = 'border-box'; sub.style.transform = ''; } }
+      else if (d.t) { sub.style.bottom = bottom + 'px'; subtext.style.minHeight = ''; sub.style.left = ''; sub.style.right = ''; subtext.style.minWidth = bgw !== null ? bgw + 'px' : ''; sub.style.transform = 'translateX(' + xoff + 'px)'; }
       showSub(d.t || '');
       tvdbg({ got: (d.t || '').slice(0, 30), hidden: document.hidden });
     }
