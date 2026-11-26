@@ -154,7 +154,7 @@ function sendCfg(test) { var o = { cfg: { style: +$('tvStyle').value, bottom: +$
   var v = ls('fs_' + k); if (v) $(k).value = v;
   $(k).addEventListener('input', function () { ls('fs_' + k, $(k).value); sendCfg(true); });
 });
-function send(obj) { if (mq) mq.publish('freesard/v1/' + $('code').value, JSON.stringify(obj)); }
+function send(obj) { obj.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7); if (mq) mq.publish('freesard/v1/' + $('code').value, JSON.stringify(obj)); }
 
 async function grab() {
   var src = video, vw = video.videoWidth, vh = video.videoHeight;
@@ -254,7 +254,7 @@ $('go').onclick = function () {
   window.__pocr = null;
   warmTranslator();
   if (mq) mq.close();
-  mq = new MiniMQTT({ brokers: FS_BROKERS, topic: null, onState: function (s) {
+  mq = new MultiMQTT({ topic: null, onState: function (s) {
     if (s === 'online') { send({ hello: 1 }); sendCfg(false); status('✅ متصل بالتلفزيون. حط المربع الزهر ع مكان الترجمة.'); }
     else if (s === 'offline') status('❌ ما في اتصال، عم جرّب من جديد...');
   } });

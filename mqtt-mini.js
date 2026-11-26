@@ -121,3 +121,38 @@ var FS_BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
   'wss://test.mosquitto.org:8081/mqtt'
 ];
+
+/* Connect to ALL brokers at once so the computer and the TV always share at least one. */
+function MultiMQTT(opts) {
+  var self = this;
+  self.clients = []; self.seen = {}; self.seenQ = [];
+  for (var i = 0; i < FS_BROKERS.length; i++) {
+    self.clients.push(new MiniMQTT({
+      brokers: [FS_BROKERS[i]],
+      topic: opts.topic,
+      onState: function (s) {
+        var on = false, j;
+        for (j = 0; j < self.clients.length; j++) if (self.clients[j].ready) on = true;
+        if (!opts.onState) return;
+        if (s === 'online') opts.onState('online');
+        else if (!on) opts.onState(s);
+      },
+      onMessage: function (t, m) {
+        var id = null;
+        try { id = JSON.parse(m).id; } catch (e) {}
+        if (id) {
+          if (self.seen[id]) return;
+          self.seen[id] = 1; self.seenQ.push(id);
+          if (self.seenQ.length > 300) delete self.seen[self.seenQ.shift()];
+        }
+        if (opts.onMessage) opts.onMessage(t, m);
+      }
+    }));
+  }
+}
+MultiMQTT.prototype.publish = function (topic, text) {
+  var ok = false, i;
+  for (i = 0; i < this.clients.length; i++) if (this.clients[i].publish(topic, text)) ok = true;
+  return ok;
+};
+MultiMQTT.prototype.close = function () { for (var i = 0; i < this.clients.length; i++) this.clients[i].close(); };

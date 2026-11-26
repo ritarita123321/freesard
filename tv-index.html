@@ -59,7 +59,7 @@
   document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
 
   function setState(s) {
-    if (s === 'online') tvdbg({ up: '0.2.2', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
+    if (s === 'online') tvdbg({ up: '0.2.3', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
@@ -115,8 +115,7 @@
     hideTimer = setTimeout(function () { sub.style.display = 'none'; }, 20000);
   }
 
-  mq = new MiniMQTT({
-    brokers: FS_BROKERS,
+  mq = new MultiMQTT({
     topic: 'freesard/v1/' + code,
     onState: setState,
     onMessage: function (t, msg) {
