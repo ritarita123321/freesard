@@ -43,7 +43,12 @@
   bottom = parseInt(store('fs_bottom') || '70', 10) || 70;
   sub.style.bottom = bottom + 'px';
 
+  var mq = null;
+  function tvdbg(o) { try { if (mq) mq.publish('freesard/tvdbg/' + code, JSON.stringify(o)); } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
+
   function setState(s) {
+    if (s === 'online') tvdbg({ up: '0.1.3', hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
@@ -52,7 +57,8 @@
     tizen.tvwindow.show(function () {
       var cur = null; try { cur = tizen.tvwindow.getSource(); } catch (x) {}
       srcEl.textContent = '📺 ' + (cur ? cur.type + ' ' + (cur.number || '') : 'TV');
-    }, function (e) { srcEl.textContent = '⚠️ ' + e.message; }, ['0px', '0px', '1920px', '1080px'], 'MAIN');
+      tvdbg({ show: 'ok', src: srcEl.textContent, hidden: document.hidden });
+    }, function (e) { srcEl.textContent = '⚠️ ' + e.message; tvdbg({ showErr: e.message }); }, ['0px', '0px', '1920px', '1080px'], 'MAIN');
   }
 
   function showHDMI(change) {
@@ -80,7 +86,7 @@
     hideTimer = setTimeout(function () { sub.style.display = 'none'; }, 7000);
   }
 
-  new MiniMQTT({
+  mq = new MiniMQTT({
     brokers: FS_BROKERS,
     topic: 'freesard/v1/' + code,
     onState: setState,
@@ -88,6 +94,7 @@
       var d; try { d = JSON.parse(msg); } catch (e) { d = { t: msg }; }
       if (d.hello) { setState('📱 التلفون اتصل!'); return; }
       showSub(d.t || '');
+      tvdbg({ got: (d.t || '').slice(0, 30), hidden: document.hidden });
     }
   });
 
@@ -98,6 +105,7 @@
   } catch (e) {}
 
   document.addEventListener('keydown', function (e) {
+    tvdbg({ key: e.keyCode });
     switch (e.keyCode) {
       case 37: hdmi = hdmi > 1 ? hdmi - 1 : 4; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
       case 39: hdmi = hdmi < 4 ? hdmi + 1 : 1; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
