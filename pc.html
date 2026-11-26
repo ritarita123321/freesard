@@ -38,15 +38,16 @@
 
   <div id="wrap"><video id="v" playsinline muted></video><div id="box"></div></div>
 
-  <div class="row"><label>من فوق</label><input id="top" type="range" min="0" max="95" value="70"></div>
-  <div class="row"><label>الطول</label><input id="h" type="range" min="5" max="60" value="22"></div>
-  <div class="row"><label>من الشمال</label><input id="left" type="range" min="0" max="60" value="8"></div>
-  <div class="row"><label>العرض</label><input id="w" type="range" min="20" max="100" value="84"></div>
+  <div class="row"><label>من فوق</label><input id="top" type="range" min="0" max="95" value="58"></div>
+  <div class="row"><label>الطول</label><input id="h" type="range" min="5" max="60" value="40"></div>
+  <div class="row"><label>من الشمال</label><input id="left" type="range" min="0" max="60" value="5"></div>
+  <div class="row"><label>العرض</label><input id="w" type="range" min="20" max="100" value="90"></div>
   <div class="row"><label>الوضوح</label><input id="thr" type="range" min="100" max="240" value="185"></div>
 
   <details open style="margin-top:10px">
     <summary>📺 شكل الترجمة ع التلفزيون</summary>
     <div class="row"><label>الشكل</label><select id="tvStyle"><option value="0">1. Glass غامق</option><option value="1">2. Glass فاتح</option><option value="2">3. عادي (أسود)</option><option value="3">4. بلا خلفية</option><option value="4">5. أسود شفاف</option><option value="5">6. زهر GTA</option><option value="6">7. نيون</option><option value="7">8. أبيض</option><option value="8">9. شريط عريض</option><option value="9">10. غروب Vice City</option></select></div>
+    <div class="row"><label>مكان تلقائي</label><input id="autoPos" type="checkbox" checked style="width:24px;height:24px"> <span class="hint">بيحط العربي فوق الإنكليزي لحالو</span></div>
     <div class="row"><label>المكان (من تحت)</label><input id="tvBottom" type="range" min="0" max="900" value="70"></div>
     <div class="row"><label>حجم الخط</label><input id="tvSize" type="range" min="28" max="80" value="46"></div>
     <div class="hint">كل ما تغيّر شي، بتطلع ترجمة تجربة ع التلفزيون لتشوف الشكل والمكان.</div>
@@ -72,8 +73,8 @@ var prevFrame = '', lastSent = '', lastSeen = Date.now(), cache = {};
 
 function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} }
 ['code', 'top', 'h', 'left', 'w', 'thr'].forEach(function (k) {
-  var v = ls('fs_' + k); if (v) $(k).value = v;
-  $(k).addEventListener('input', function () { ls('fs_' + k, $(k).value); drawBox(); });
+  var v = ls('fs2_' + k); if (v) $(k).value = v;
+  $(k).addEventListener('input', function () { ls('fs2_' + k, $(k).value); drawBox(); });
 });
 
 function dbgSend(o) { try { if (mq) mq.publish('freesard/dbg/' + $('code').value, JSON.stringify(o)); } catch (e) {} }
@@ -150,13 +151,14 @@ async function grab() {
   var sx = vw * $('left').value / 100, sy = vh * $('top').value / 100;
   var sw = Math.min(vw - sx, vw * $('w').value / 100), sh = Math.min(vh - sy, vh * $('h').value / 100);
   var scale = Math.min(1, 1400 / sw);
+  lastCrop = { sy: sy, scale: scale, vh: vh };
   dbg.width = Math.round(sw * scale); dbg.height = Math.round(sh * scale);
   var ctx = dbg.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dbg.width, dbg.height);
   var img = ctx.getImageData(0, 0, dbg.width, dbg.height), d = img.data, thr = +$('thr').value;
   for (var i = 0; i < d.length; i += 4) {
-    var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    var v = l > thr ? 0 : 255; // white subtitle text -> black on white
+    var mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+    var v = (mn > thr && mx - mn < 45) ? 0 : 255; // white low-saturation subtitle text -> black on white
     d[i] = d[i + 1] = d[i + 2] = v;
   }
   ctx.putImageData(img, 0, 0);
@@ -164,7 +166,7 @@ async function grab() {
   return dbg;
 }
 
-var dbg_w = 0, dbg_h = 0, seqN = 0;
+var dbg_w = 0, dbg_h = 0, seqN = 0, lastCrop = null;
 var fsW = null, fsCb = null;
 function fsTimer(cb, ms) {
   fsCb = cb;
@@ -180,7 +182,10 @@ function tick() {
   grab().then(function (c) { return c ? worker.recognize(c) : null; }).then(function (res) {
     if (!res) { dbgSend({ noframe: 1, vw: video.videoWidth, ic: !!window.__ic }); return; }
     dbgSend({ ocr: (res.data.text || '').slice(0, 200), w: dbg_w, h: dbg_h, box: [$('top').value, $('h').value, $('left').value, $('w').value, $('thr').value] });
-    var good = (res.data.lines && res.data.lines.length) ? res.data.lines.filter(function (l) { return l.confidence >= 72; }).map(function (l) { return l.text; }).join('\n') : ((res.data.confidence || 0) >= 72 ? res.data.text : '');
+    var gl = (res.data.lines || []).filter(function (l) { return l.confidence >= 65 && cleanText(l.text); });
+    var good = gl.length ? gl.map(function (l) { return l.text; }).join('\n') : ((!(res.data.lines && res.data.lines.length) && (res.data.confidence || 0) >= 65) ? res.data.text : '');
+    var pos = null;
+    if (gl.length && lastCrop) { var y0 = Math.min.apply(null, gl.map(function (l) { return l.bbox.y0; })), y1 = Math.max.apply(null, gl.map(function (l) { return l.bbox.y1; })); pos = [(lastCrop.sy + y0 / lastCrop.scale) / lastCrop.vh, (lastCrop.sy + y1 / lastCrop.scale) / lastCrop.vh]; }
     var text = cleanText(good || '');
     var n = norm(text);
     if (!n) {
@@ -195,7 +200,7 @@ function tick() {
     var my = ++seqN;
     translate(text).then(function (ar) {
       if (my !== seqN) return;
-      $('ar').textContent = ar; send({ t: ar });
+      $('ar').textContent = ar; send({ t: ar, pos: $('autoPos').checked ? pos : null });
     }).catch(function (e) { status('⚠️ الترجمة: ' + e.message); });
   }).catch(function (e) { status('⚠️ OCR: ' + e.message); })
     .then(function () { busy = false; });
@@ -219,7 +224,7 @@ $('go').onclick = function () {
     status('⏳ عم حمّل قارئ النصوص (أول مرة بس)...');
     Tesseract.createWorker('eng').then(function (w) {
       worker = w;
-      return w.setParameters({ tessedit_pageseg_mode: '6' });
+      return w.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?\'-:;()$%&" });
     }).then(function () { status('✅ جاهز'); }).catch(function (e) { status('⚠️ ' + e.message); });
   }
   tick();
