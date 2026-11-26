@@ -48,12 +48,12 @@
   document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
 
   function setState(s) {
-    if (s === 'online') tvdbg({ up: '0.1.4', vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
+    if (s === 'online') tvdbg({ up: '0.1.5', vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
 
-  var vmode = parseInt(store('fs_vmode') || '1', 10) || 0;
+  var vmode = parseInt(store('fs_vmode5') || '0', 10) || 0;
   var RECTS = [['0px', '0px', '1920px', '1080px'], ['480px', '270px', '960px', '540px']];
   function showVideo(srcEl) {
     if (vmode === 2) { try { tizen.tvwindow.hide(function () { tvdbg({ vmode: 2, hide: 'ok' }); }, function (e) { tvdbg({ hideErr: e.message }); }, 'MAIN'); } catch (x) { tvdbg({ hideEx: x.message }); } srcEl.textContent = 'وضع 3: بلا صورة'; return; }
@@ -61,7 +61,7 @@
       var cur = null; try { cur = tizen.tvwindow.getSource(); } catch (x) {}
       srcEl.textContent = '📺 ' + (cur ? cur.type + ' ' + (cur.number || '') : 'TV');
       tvdbg({ show: 'ok', vmode: vmode, src: srcEl.textContent, hidden: document.hidden });
-    }, function (e) { srcEl.textContent = '⚠️ ' + e.message; tvdbg({ showErr: e.message }); }, RECTS[vmode], 'MAIN');
+    }, function (e) { srcEl.textContent = '⚠️ ' + e.message; tvdbg({ showErr: e.message }); }, RECTS[vmode], 'MAIN', 'BEHIND');
     srcEl.textContent += ' · وضع ' + (vmode + 1);
   }
 
@@ -115,7 +115,7 @@
       case 39: hdmi = hdmi < 4 ? hdmi + 1 : 1; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
       case 38: bottom = Math.min(900, bottom + 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
       case 40: bottom = Math.max(0, bottom - 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
-      case 10252: case 415: case 19: vmode = (vmode + 1) % 3; store('fs_vmode', vmode); panel.style.display = 'block'; showHDMI(); break;
+      case 10252: case 415: case 19: vmode = (vmode + 1) % 3; store('fs_vmode5', vmode); panel.style.display = 'block'; showHDMI(); break;
       case 13: panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; break;
       case 10009: try { tizen.application.getCurrentApplication().exit(); } catch (x) {} break;
     }
