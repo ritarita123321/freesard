@@ -59,7 +59,7 @@
   document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
 
   function setState(s) {
-    if (s === 'online') tvdbg({ up: '0.2.1', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
+    if (s === 'online') tvdbg({ up: '0.2.2', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
@@ -123,8 +123,8 @@
       var d; try { d = JSON.parse(msg); } catch (e) { d = { t: msg }; }
       if (d.hello) { setState('📱 التلفون اتصل!'); return; }
       if (d.cfg) { applyCfg(d.cfg); if (d.t === undefined) return; }
-      if (d.t && d.pos && d.pos.length >= 2) { sub.style.bottom = Math.max(0, Math.round((1 - d.pos[1]) * 1080) - 16) + 'px'; subtext.style.minHeight = Math.max(0, Math.round((d.pos[1] - d.pos[0]) * 1080)) + 'px'; if (d.pos.length === 4) { sub.style.left = Math.max(0, Math.round(d.pos[2] * 1920) - 50) + 'px'; sub.style.right = Math.max(0, Math.round((1 - d.pos[3]) * 1920) - 50) + 'px'; subtext.style.minWidth = '100%'; subtext.style.boxSizing = 'border-box'; sub.style.transform = ''; } }
-      else if (d.t) { sub.style.bottom = bottom + 'px'; subtext.style.minHeight = ''; sub.style.left = ''; sub.style.right = ''; subtext.style.minWidth = bgw !== null ? bgw + 'px' : ''; sub.style.transform = 'translateX(' + xoff + 'px)'; }
+      if (d.t && d.pos && d.pos.length >= 2) { var pm = d.pm || 'cover'; sub.style.top = ''; if (pm === 'above') { sub.style.bottom = Math.round((1 - d.pos[0]) * 1080) + 14 + 'px'; subtext.style.minHeight = ''; } else if (pm === 'below') { sub.style.bottom = 'auto'; sub.style.top = Math.round(d.pos[1] * 1080) + 14 + 'px'; subtext.style.minHeight = ''; } else { sub.style.bottom = Math.max(0, Math.round((1 - d.pos[1]) * 1080) - 16) + 'px'; subtext.style.minHeight = Math.max(0, Math.round((d.pos[1] - d.pos[0]) * 1080)) + 'px'; } if (d.pos.length === 4) { sub.style.left = Math.max(0, Math.round(d.pos[2] * 1920) - 50) + 'px'; sub.style.right = Math.max(0, Math.round((1 - d.pos[3]) * 1920) - 50) + 'px'; subtext.style.minWidth = '100%'; subtext.style.boxSizing = 'border-box'; sub.style.transform = ''; } }
+      else if (d.t) { sub.style.top = ''; sub.style.bottom = bottom + 'px'; subtext.style.minHeight = ''; sub.style.left = ''; sub.style.right = ''; subtext.style.minWidth = bgw !== null ? bgw + 'px' : ''; sub.style.transform = 'translateX(' + xoff + 'px)'; }
       showSub(d.t || '');
       tvdbg({ got: (d.t || '').slice(0, 30), hidden: document.hidden });
     }

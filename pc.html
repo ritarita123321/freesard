@@ -53,7 +53,7 @@
   <details open style="margin-top:10px">
     <summary>📺 شكل الترجمة ع التلفزيون</summary>
     <div class="row"><label>الشكل</label><select id="tvStyle"><option value="0">1. Glass غامق</option><option value="1">2. Glass فاتح</option><option value="2">3. عادي (أسود)</option><option value="3">4. بلا خلفية</option><option value="4">5. أسود شفاف</option><option value="5">6. زهر GTA</option><option value="6">7. نيون</option><option value="7">8. أبيض</option><option value="8">9. شريط عريض</option><option value="9">10. غروب Vice City</option></select></div>
-    <div class="row"><label>مكان تلقائي</label><input id="autoPos" type="checkbox" checked style="width:24px;height:24px"> <span class="hint">بيحط العربي فوق الإنكليزي لحالو</span></div>
+    <div class="row"><label>مكان تلقائي</label><select id="posMode"><option value="above" selected>فوق الكتابة الإنكليزية (بعيد عنها)</option><option value="below">تحت الكتابة الإنكليزية</option><option value="cover">فوق الإنكليزي ومغطّيه</option><option value="off">مطفي (بستعمل المكان اليدوي)</option></select></div>
     <div class="row"><label>المكان (من تحت)</label><input id="tvBottom" type="range" min="0" max="900" value="70"></div>
     <div class="row"><label>مدة بقاء الترجمة</label><select id="hold"><option value="0">ما تضل (بتروح مع الإنكليزي)</option><option value="2" selected>2 ثانية زيادة</option><option value="4">4 ثواني زيادة</option><option value="6">6 ثواني زيادة</option><option value="10">10 ثواني زيادة</option></select></div>
     <div class="row"><label>حجم الخط</label><input id="tvSize" type="range" min="28" max="80" value="46"></div>
@@ -148,6 +148,7 @@ function translate(text) {
 }
 
 function sendCfg(test) { var o = { cfg: { style: +$('tvStyle').value, bottom: +$('tvBottom').value, size: +$('tvSize').value, bgw: +$('tvBgW').value, pad: +$('tvPad').value, x: -$('tvX').value } }; if (test) o.t = 'هيك بتطلع الترجمة ع التلفزيون'; send(o); }
+(function () { var p = ls('fs_posMode'); if (p) $('posMode').value = p; $('posMode').addEventListener('change', function () { ls('fs_posMode', $('posMode').value); }); })();
 (function () { var v = ls('fs_hold'); if (v) $('hold').value = v; $('hold').addEventListener('change', function () { ls('fs_hold', $('hold').value); }); })();
 ['tvStyle', 'tvBottom', 'tvSize', 'tvBgW', 'tvPad', 'tvX'].forEach(function (k) {
   var v = ls('fs_' + k); if (v) $(k).value = v;
@@ -237,7 +238,7 @@ function tick() {
     var my = ++seqN;
     translate(text).then(function (ar) {
       if (my !== seqN) return;
-      $('ar').textContent = ar; send({ t: ar, pos: $('autoPos').checked ? pos : null });
+      $('ar').textContent = ar; send({ t: ar, pos: $('posMode').value !== 'off' ? pos : null, pm: $('posMode').value });
     }).catch(function (e) { status('⚠️ الترجمة: ' + e.message); });
   }).catch(function (e) { status('⚠️ OCR: ' + e.message); })
     .then(function () { busy = false; });
