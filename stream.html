@@ -174,14 +174,39 @@ function fsTimer(cb, ms) {
   fsW.postMessage(ms);
 }
 
+function ptY(p) { return Array.isArray(p) ? p[1] : p.y; }
+function recog(c) {
+  if (window.__pocr) {
+    return window.__pocr.ocr(c).then(function (r) {
+      var ls = (r.lines || []).map(function (l) {
+        var ys = ((l.box && l.box.points) || []).map(ptY);
+        return { text: l.text || '', confidence: (l.score || 0) * 100, bbox: { y0: ys.length ? Math.min.apply(null, ys) : 0, y1: ys.length ? Math.max.apply(null, ys) : 0 } };
+      });
+      return { data: { text: r.text || '', lines: ls, confidence: 100, engine: 'paddle' } };
+    }).catch(function (e) { dbgSend({ pocrRunErr: String(e && e.message || e) }); window.__pocr = null; return worker.recognize(c); });
+  }
+  return worker.recognize(c);
+}
+function loadPaddle() {
+  if (window.__pocr || window.__pocrLoading) return;
+  window.__pocrLoading = true;
+  import('https://cdn.jsdelivr.net/npm/ffocr@0.1.13/+esm').then(function (m) {
+    var o = m.createDefaultPPOcrV5({ cacheModels: true });
+    var probe = document.createElement('canvas'); probe.width = 320; probe.height = 64;
+    var g = probe.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 320, 64); g.fillStyle = '#000'; g.font = '32px Arial'; g.fillText('Hello there', 10, 44);
+    status('⏳ عم حمّل قارئ النصوص القوي (أول مرة بس)...');
+    return o.ocr(probe).then(function (r) { window.__pocr = o; status('✅ قارئ النصوص القوي جاهز'); dbgSend({ pocr: 'ready', probe: r.text, provider: r.runtime && r.runtime.provider }); });
+  }).catch(function (e) { window.__pocrLoading = false; dbgSend({ pocrErr: String(e && e.message || e) }); });
+}
+
 function tick() {
   if (!running) return;
   fsTimer(tick, +$('every').value);
   if (busy || !worker) return;
   busy = true;
-  grab().then(function (c) { return c ? worker.recognize(c) : null; }).then(function (res) {
+  grab().then(function (c) { return c ? recog(c) : null; }).then(function (res) {
     if (!res) { dbgSend({ noframe: 1, vw: video.videoWidth, ic: !!window.__ic }); return; }
-    dbgSend({ ocr: (res.data.text || '').slice(0, 200), w: dbg_w, h: dbg_h, box: [$('top').value, $('h').value, $('left').value, $('w').value, $('thr').value] });
+    dbgSend({ eng: res.data.engine || 'tess', ocr: (res.data.text || '').slice(0, 200), w: dbg_w, h: dbg_h, box: [$('top').value, $('h').value, $('left').value, $('w').value, $('thr').value] });
     var gl = (res.data.lines || []).filter(function (l) { return l.confidence >= 65 && cleanText(l.text); });
     var good = gl.length ? gl.map(function (l) { return l.text; }).join('\n') : ((!(res.data.lines && res.data.lines.length) && (res.data.confidence || 0) >= 65) ? res.data.text : '');
     var pos = null;
@@ -211,6 +236,7 @@ $('go').onclick = function () {
   if (!/^\d{6}$/.test(code)) { status('اكتب الرمز يلي ع التلفزيون (6 أرقام)'); return; }
   if (running) { running = false; $('go').textContent = 'ابدأ'; status('وقفت'); return; }
   running = true; $('go').textContent = 'وقّف';
+  loadPaddle();
   warmTranslator();
   if (mq) mq.close();
   mq = new MiniMQTT({ brokers: FS_BROKERS, topic: null, onState: function (s) {
