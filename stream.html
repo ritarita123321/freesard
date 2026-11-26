@@ -83,8 +83,8 @@ var prevFrame = '', lastSent = '', lastSeen = Date.now(), cache = {};
 
 function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} }
 ['code', 'top', 'h', 'left', 'w', 'thr'].forEach(function (k) {
-  var v = ls('fs2_' + k); if (v) $(k).value = v;
-  $(k).addEventListener('input', function () { ls('fs2_' + k, $(k).value); drawBox(); });
+  var v = ls('fs3_' + k); if (v) $(k).value = v;
+  $(k).addEventListener('input', function () { ls('fs3_' + k, $(k).value); drawBox(); });
 });
 
 function dbgSend(o) { try { if (mq) mq.publish('freesard/dbg/' + $('code').value, JSON.stringify(o)); } catch (e) {} }
@@ -251,7 +251,7 @@ $('go').onclick = function () {
   if (!/^\d{6}$/.test(code)) { status('اكتب الرمز يلي ع التلفزيون (6 أرقام)'); return; }
   if (running) { running = false; $('go').textContent = 'ابدأ'; status('وقفت'); return; }
   running = true; $('go').textContent = 'وقّف';
-  loadPaddle();
+  window.__pocr = null;
   warmTranslator();
   if (mq) mq.close();
   mq = new MiniMQTT({ brokers: FS_BROKERS, topic: null, onState: function (s) {
