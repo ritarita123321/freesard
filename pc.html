@@ -114,15 +114,16 @@ function translate(text) {
 
 function send(obj) { if (mq) mq.publish('freesard/v1/' + $('code').value, JSON.stringify(obj)); }
 
-function grab() {
-  var vw = video.videoWidth, vh = video.videoHeight;
+async function grab() {
+  var src = video, vw = video.videoWidth, vh = video.videoHeight;
+  if (window.__ic) { try { var bm = await window.__ic.grabFrame(); src = bm; vw = bm.width; vh = bm.height; } catch (e) {} }
   if (!vw) return null;
   var sx = vw * $('left').value / 100, sy = vh * $('top').value / 100;
   var sw = Math.min(vw - sx, vw * $('w').value / 100), sh = Math.min(vh - sy, vh * $('h').value / 100);
   var scale = Math.min(1, 1400 / sw);
   dbg.width = Math.round(sw * scale); dbg.height = Math.round(sh * scale);
   var ctx = dbg.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dbg.width, dbg.height);
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dbg.width, dbg.height);
   var img = ctx.getImageData(0, 0, dbg.width, dbg.height), d = img.data, thr = +$('thr').value;
   for (var i = 0; i < d.length; i += 4) {
     var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
@@ -133,13 +134,20 @@ function grab() {
   return dbg;
 }
 
+var fsW = null, fsCb = null;
+function fsTimer(cb, ms) {
+  fsCb = cb;
+  if (!fsW) { try { fsW = new Worker(URL.createObjectURL(new Blob(['onmessage=function(e){setTimeout(function(){postMessage(1)},e.data)}']))); fsW.onmessage = function () { if (fsCb) fsCb(); }; } catch (e) { return setTimeout(cb, ms); } }
+  fsW.postMessage(ms);
+}
+
 function tick() {
   if (!running) return;
-  setTimeout(tick, +$('every').value);
+  fsTimer(tick, +$('every').value);
   if (busy || !worker) return;
-  var c = grab(); if (!c) return;
   busy = true;
-  worker.recognize(c).then(function (res) {
+  grab().then(function (c) { return c ? worker.recognize(c) : null; }).then(function (res) {
+    if (!res) return;
     var text = cleanText(res.data.text || '');
     var n = norm(text);
     if (!n) {
@@ -169,7 +177,7 @@ $('go').onclick = function () {
     else if (s === 'offline') status('❌ ما في اتصال، عم جرّب من جديد...');
   } });
   navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false })
-    .then(function (st) { video.srcObject = st; return video.play(); })
+    .then(function (st) { video.srcObject = st; try { window.__ic = new ImageCapture(st.getVideoTracks()[0]); } catch (e) {} return video.play(); })
     .catch(function (e) { status('⚠️ مشاركة الشاشة: ' + e.message); });
   if (!worker) {
     status('⏳ عم حمّل قارئ النصوص (أول مرة بس)...');
