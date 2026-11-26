@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Fawaz GTA6</title>
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: transparent; font-family: Tahoma, Arial, sans-serif; }
+  #sub { position: absolute; left: 160px; right: 160px; bottom: 70px; text-align: center; display: none; }
+  #sub span { display: inline-block; background: rgba(0,0,0,.94); color: #fff; font-size: 46px; line-height: 1.5; padding: 14px 40px; min-width: 900px; border-radius: 12px; }
+  #panel { position: absolute; top: 40px; left: 40px; background: rgba(10,10,30,.88); color: #fff; padding: 28px 36px; border-radius: 18px; font-size: 30px; line-height: 1.6; max-width: 900px; }
+  #code { font-size: 84px; letter-spacing: 14px; color: #ff6fb5; font-weight: bold; direction: ltr; text-align: center; }
+  #state { font-size: 24px; opacity: .8; }
+  small { font-size: 22px; opacity: .75; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div>اكتب هالرمز بصفحة التلفون:</div>
+  <div id="code">------</div>
+  <div id="state">...</div>
+  <div id="src"></div>
+  <small>شغّل الـ PS5 ع التلفزيون أول، وبعدين افتح التطبيق · ⬅️➡️ تغيير مدخل HDMI · ⬆️⬇️ حرّك الترجمة لحتى تغطّي الكتابة الإنكليزية · OK إخفاء/إظهار هالمربع · Back خروج</small>
+</div>
+<div id="sub"><span id="subtext"></span></div>
+
+<script src="mqtt-mini.js"></script>
+<script>
+(function () {
+  var hdmi = 1, bottom = 70, hideTimer = null;
+  var panel = document.getElementById('panel');
+  var sub = document.getElementById('sub');
+  var subtext = document.getElementById('subtext');
+
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+  var code = store('fs_code');
+  if (!code || !/^\d{6}$/.test(code)) {
+    code = String(Math.floor(100000 + Math.random() * 900000));
+    store('fs_code', code);
+  }
+  document.getElementById('code').textContent = code;
+  hdmi = parseInt(store('fs_hdmi') || '1', 10) || 1;
+  bottom = parseInt(store('fs_bottom') || '70', 10) || 70;
+  sub.style.bottom = bottom + 'px';
+
+  function setState(s) {
+    var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
+    document.getElementById('state').textContent = map[s] || s;
+  }
+
+  function showVideo(srcEl) {
+    tizen.tvwindow.show(function () {
+      var cur = null; try { cur = tizen.tvwindow.getSource(); } catch (x) {}
+      srcEl.textContent = '📺 ' + (cur ? cur.type + ' ' + (cur.number || '') : 'TV');
+    }, function (e) { srcEl.textContent = '⚠️ ' + e.message; }, ['0px', '0px', '1920px', '1080px'], 'MAIN');
+  }
+
+  function showHDMI(change) {
+    var srcEl = document.getElementById('src');
+    if (!window.tizen || !tizen.tvwindow) { srcEl.textContent = '⚠️ هالتلفزيون ما بيدعم عرض HDMI جوّا التطبيق'; return; }
+    try {
+      if (!change) { showVideo(srcEl); return; }
+      tizen.systeminfo.getPropertyValue('VIDEOSOURCE', function (vs) {
+        var list = (vs && vs.connected) || [], hd = [], i, src = null;
+        for (i = 0; i < list.length; i++) if (list[i].type === 'HDMI') hd.push(list[i]);
+        if (!hd.length) { srcEl.textContent = '⚠️ ما في شي مشبوك ع HDMI'; return; }
+        for (i = 0; i < hd.length; i++) if (hd[i].number === hdmi) src = hd[i];
+        if (!src) { src = hd[0]; hdmi = src.number; store('fs_hdmi', hdmi); }
+        tizen.tvwindow.setSource(src, function () { showVideo(srcEl); }, function (e) { srcEl.textContent = '⚠️ HDMI ' + hdmi + ': ' + e.message; });
+      }, function (e) { srcEl.textContent = '⚠️ ' + e.message; });
+    } catch (e) { srcEl.textContent = '⚠️ ' + e.message; }
+  }
+
+  function showSub(text) {
+    if (hideTimer) clearTimeout(hideTimer);
+    if (!text) { sub.style.display = 'none'; return; }
+    subtext.textContent = text;
+    sub.style.display = 'block';
+    panel.style.display = 'none';
+    hideTimer = setTimeout(function () { sub.style.display = 'none'; }, 7000);
+  }
+
+  new MiniMQTT({
+    brokers: FS_BROKERS,
+    topic: 'freesard/v1/' + code,
+    onState: setState,
+    onMessage: function (t, msg) {
+      var d; try { d = JSON.parse(msg); } catch (e) { d = { t: msg }; }
+      if (d.hello) { setState('📱 التلفون اتصل!'); return; }
+      showSub(d.t || '');
+    }
+  });
+
+  try {
+    if (window.tizen && tizen.tvinputdevice) {
+      ['ColorF0Red', 'ColorF1Green'].forEach(function (k) { try { tizen.tvinputdevice.registerKey(k); } catch (e) {} });
+    }
+  } catch (e) {}
+
+  document.addEventListener('keydown', function (e) {
+    switch (e.keyCode) {
+      case 37: hdmi = hdmi > 1 ? hdmi - 1 : 4; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
+      case 39: hdmi = hdmi < 4 ? hdmi + 1 : 1; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
+      case 38: bottom = Math.min(900, bottom + 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
+      case 40: bottom = Math.max(0, bottom - 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
+      case 13: panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; break;
+      case 10009: try { tizen.application.getCurrentApplication().exit(); } catch (x) {} break;
+    }
+  });
+
+  showHDMI();
+})();
+</script>
+</body>
+</html>
