@@ -6,7 +6,10 @@
 <style>
   html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: transparent; font-family: Tahoma, Arial, sans-serif; }
   #sub { position: absolute; left: 160px; right: 160px; bottom: 70px; text-align: center; display: none; }
-  #sub span { display: inline-block; background: rgba(0,0,0,.94); color: #fff; font-size: 46px; line-height: 1.5; padding: 14px 40px; min-width: 900px; border-radius: 12px; }
+  #sub span { display: inline-block; color: #fff; font-size: 46px; line-height: 1.5; padding: 16px 48px; min-width: 900px; border-radius: 28px; text-shadow: 0 2px 8px rgba(0,0,0,.65); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+  body.s0 #sub span { background: linear-gradient(135deg, rgba(55,55,80,.80), rgba(12,12,22,.88)); border: 2px solid rgba(255,255,255,.28); box-shadow: 0 12px 44px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.30); }
+  body.s1 #sub span { background: linear-gradient(135deg, rgba(255,255,255,.30), rgba(255,255,255,.10)); border: 2px solid rgba(255,255,255,.50); box-shadow: 0 12px 44px rgba(0,0,0,.35), inset 0 2px 0 rgba(255,255,255,.60); }
+  body.s2 #sub span { background: rgba(0,0,0,.94); border-radius: 12px; }
   #panel { position: absolute; top: 40px; left: 40px; background: rgba(10,10,30,.88); color: #fff; padding: 28px 36px; border-radius: 18px; font-size: 30px; line-height: 1.6; max-width: 900px; }
   #code { font-size: 84px; letter-spacing: 14px; color: #ff6fb5; font-weight: bold; direction: ltr; text-align: center; }
   #state { font-size: 24px; opacity: .8; }
@@ -19,7 +22,7 @@
   <div id="code">------</div>
   <div id="state">...</div>
   <div id="src"></div>
-  <small>⏯ تغيير طريقة العرض · شغّل الـ PS5 ع التلفزيون أول، وبعدين افتح التطبيق · ⬅️➡️ تغيير مدخل HDMI · ⬆️⬇️ حرّك الترجمة لحتى تغطّي الكتابة الإنكليزية · OK إخفاء/إظهار هالمربع · Back خروج</small>
+  <small>⏯ تغيير شكل الترجمة · شغّل الـ PS5 ع التلفزيون أول، وبعدين افتح التطبيق · ⬅️➡️ تغيير مدخل HDMI · ⬆️⬇️ حرّك الترجمة لحتى تغطّي الكتابة الإنكليزية · OK إخفاء/إظهار هالمربع · Back خروج</small>
 </div>
 <div id="sub"><span id="subtext"></span></div>
 
@@ -48,12 +51,14 @@
   document.addEventListener('visibilitychange', function () { tvdbg({ hidden: document.hidden }); });
 
   function setState(s) {
-    if (s === 'online') tvdbg({ up: '0.1.5', vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
+    if (s === 'online') tvdbg({ up: '0.1.6', sty: sty, vmode: vmode, hidden: document.hidden, tizen: !!window.tizen, tvw: !!(window.tizen && tizen.tvwindow), src: document.getElementById('src').textContent });
     var map = { connecting: '⏳ عم يتصل...', online: '✅ متصل، ناطر التلفون', offline: '❌ ما في اتصال، عم يجرّب من جديد' };
     document.getElementById('state').textContent = map[s] || s;
   }
 
-  var vmode = parseInt(store('fs_vmode5') || '0', 10) || 0;
+  var vmode = 0;
+  var sty = parseInt(store('fs_style') || '0', 10) || 0;
+  document.body.className = 's' + sty;
   var RECTS = [['0px', '0px', '1920px', '1080px'], ['480px', '270px', '960px', '540px']];
   function showVideo(srcEl) {
     if (vmode === 2) { try { tizen.tvwindow.hide(function () { tvdbg({ vmode: 2, hide: 'ok' }); }, function (e) { tvdbg({ hideErr: e.message }); }, 'MAIN'); } catch (x) { tvdbg({ hideEx: x.message }); } srcEl.textContent = 'وضع 3: بلا صورة'; return; }
@@ -115,7 +120,7 @@
       case 39: hdmi = hdmi < 4 ? hdmi + 1 : 1; store('fs_hdmi', hdmi); showHDMI(true); panel.style.display = 'block'; break;
       case 38: bottom = Math.min(900, bottom + 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
       case 40: bottom = Math.max(0, bottom - 10); sub.style.bottom = bottom + 'px'; store('fs_bottom', bottom); showSub('مكان الترجمة هون'); break;
-      case 10252: case 415: case 19: vmode = (vmode + 1) % 3; store('fs_vmode5', vmode); panel.style.display = 'block'; showHDMI(); break;
+      case 10252: case 415: case 19: sty = (sty + 1) % 3; store('fs_style', sty); document.body.className = 's' + sty; showSub(['شكل 1: Glass غامق', 'شكل 2: Glass فاتح', 'شكل 3: عادي'][sty]); break;
       case 13: panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; break;
       case 10009: try { tizen.application.getCurrentApplication().exit(); } catch (x) {} break;
     }
