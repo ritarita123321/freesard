@@ -162,7 +162,7 @@ async function grab() {
   if (!vw) return null;
   var sx = vw * $('left').value / 100, sy = vh * $('top').value / 100;
   var sw = Math.min(vw - sx, vw * $('w').value / 100), sh = Math.min(vh - sy, vh * $('h').value / 100);
-  var scale = Math.min(1, 1100 / sw);
+  var scale = Math.min(2, 2200 / sw);
   lastCrop = { sy: sy, sx: sx, scale: scale, vh: vh, vw: vw };
   dbg.width = Math.round(sw * scale); dbg.height = Math.round(sh * scale);
   var ctx = dbg.getContext('2d', { willReadFrequently: true });
@@ -222,8 +222,8 @@ function tick() {
   grab().then(function (c) { return c ? recog(c) : null; }).then(function (res) {
     if (!res) { dbgSend({ noframe: 1, vw: video.videoWidth, ic: !!window.__ic }); return; }
     dbgSend({ eng: res.data.engine || 'tess', ocr: (res.data.text || '').slice(0, 200), w: dbg_w, h: dbg_h, box: [$('top').value, $('h').value, $('left').value, $('w').value, $('thr').value] });
-    var gl = (res.data.lines || []).filter(function (l) { return l.confidence >= 65 && cleanText(l.text); });
-    var good = gl.length ? gl.map(function (l) { return l.text; }).join('\n') : ((!(res.data.lines && res.data.lines.length) && (res.data.confidence || 0) >= 65) ? res.data.text : '');
+    var gl = (res.data.lines || []).filter(function (l) { return l.confidence >= 45 && cleanText(l.text); });
+    var good = gl.length ? gl.map(function (l) { return l.text; }).join('\n') : ((!(res.data.lines && res.data.lines.length) && (res.data.confidence || 0) >= 45) ? res.data.text : '');
     var pos = null;
     if (gl.length && lastCrop) { var y0 = Math.min.apply(null, gl.map(function (l) { return l.bbox.y0; })), y1 = Math.max.apply(null, gl.map(function (l) { return l.bbox.y1; })); var x0 = Math.min.apply(null, gl.map(function (l) { return l.bbox.x0 || 0; })), x1 = Math.max.apply(null, gl.map(function (l) { return l.bbox.x1 || 0; })); pos = [(lastCrop.sy + y0 / lastCrop.scale) / lastCrop.vh, (lastCrop.sy + y1 / lastCrop.scale) / lastCrop.vh, (lastCrop.sx + x0 / lastCrop.scale) / lastCrop.vw, (lastCrop.sx + x1 / lastCrop.scale) / lastCrop.vw]; }
     var text = cleanText(good || '');
