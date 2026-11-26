@@ -44,12 +44,20 @@
   <div class="row"><label>العرض</label><input id="w" type="range" min="20" max="100" value="84"></div>
   <div class="row"><label>الوضوح</label><input id="thr" type="range" min="100" max="240" value="185"></div>
 
+  <details open style="margin-top:10px">
+    <summary>📺 شكل الترجمة ع التلفزيون</summary>
+    <div class="row"><label>الشكل</label><select id="tvStyle"><option value="0">Glass غامق</option><option value="1">Glass فاتح</option><option value="2">عادي (أسود)</option></select></div>
+    <div class="row"><label>المكان (من تحت)</label><input id="tvBottom" type="range" min="0" max="900" value="70"></div>
+    <div class="row"><label>حجم الخط</label><input id="tvSize" type="range" min="28" max="80" value="46"></div>
+    <div class="hint">كل ما تغيّر شي، بتطلع ترجمة تجربة ع التلفزيون لتشوف الشكل والمكان.</div>
+  </details>
+
   <div id="out"><div id="en">—</div><div id="ar">الترجمة بتطلع هون وع التلفزيون</div></div>
 
   <details>
     <summary>إعدادات إضافية</summary>
     <div class="row"><label>إيميلك</label><input id="email" type="email" placeholder="اختياري: بيكبّر حد الترجمة المجانية"></div>
-    <div class="row"><label>كل</label><select id="every"><option value="900">0.9 ثانية</option><option value="1300" selected>1.3 ثانية</option><option value="2000">2 ثانية</option></select></div>
+    <div class="row"><label>سرعة القراءة</label><select id="every"><option value="300" selected>0.3 ثانية (الأسرع)</option><option value="600">0.6 ثانية</option><option value="900">0.9 ثانية</option><option value="1300">1.3 ثانية</option><option value="2000">2 ثانية</option></select></div>
     <div class="hint">الترجمة عبر MyMemory المجاني: حوالي 5000 حرف باليوم بلا إيميل، و50000 مع إيميل. قراءة النص (OCR) بتصير ع تلفونك نفسه.</div>
     <canvas id="dbg" style="width:100%;margin-top:8px;background:#fff"></canvas>
   </details>
@@ -64,7 +72,7 @@ var mq = null, worker = null, running = false, busy = false;
 var prevFrame = '', lastSent = '', lastSeen = Date.now(), cache = {};
 
 function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} }
-['code', 'email', 'top', 'h', 'left', 'w', 'thr', 'every'].forEach(function (k) {
+['code', 'email', 'top', 'h', 'left', 'w', 'thr'].forEach(function (k) {
   var v = ls('fs_' + k); if (v) $(k).value = v;
   $(k).addEventListener('input', function () { ls('fs_' + k, $(k).value); drawBox(); });
 });
@@ -113,6 +121,11 @@ function translate(text) {
   });
 }
 
+function sendCfg(test) { var o = { cfg: { style: +$('tvStyle').value, bottom: +$('tvBottom').value, size: +$('tvSize').value } }; if (test) o.t = 'هيك بتطلع الترجمة ع التلفزيون'; send(o); }
+['tvStyle', 'tvBottom', 'tvSize'].forEach(function (k) {
+  var v = ls('fs_' + k); if (v) $(k).value = v;
+  $(k).addEventListener('input', function () { ls('fs_' + k, $(k).value); sendCfg(true); });
+});
 function send(obj) { if (mq) mq.publish('freesard/v1/' + $('code').value, JSON.stringify(obj)); }
 
 async function grab() {
@@ -136,7 +149,7 @@ async function grab() {
   return dbg;
 }
 
-var dbg_w = 0, dbg_h = 0;
+var dbg_w = 0, dbg_h = 0, seqN = 0;
 var fsW = null, fsCb = null;
 function fsTimer(cb, ms) {
   fsCb = cb;
@@ -159,11 +172,13 @@ function tick() {
       return;
     }
     lastSeen = Date.now();
-    var stable = sim(n, prevFrame) > 0.85; prevFrame = n;
+    var stable = sim(n, prevFrame) > 0.85 || n.length > 20; prevFrame = n;
     if (!stable || sim(n, lastSent) > 0.8) return;
     lastSent = n;
     $('en').textContent = text;
-    return translate(text).then(function (ar) {
+    var my = ++seqN;
+    translate(text).then(function (ar) {
+      if (my !== seqN) return;
       $('ar').textContent = ar; send({ t: ar });
     }).catch(function (e) { status('⚠️ الترجمة: ' + e.message); });
   }).catch(function (e) { status('⚠️ OCR: ' + e.message); })
@@ -177,7 +192,7 @@ $('go').onclick = function () {
   running = true; $('go').textContent = 'وقّف';
   if (mq) mq.close();
   mq = new MiniMQTT({ brokers: FS_BROKERS, topic: null, onState: function (s) {
-    if (s === 'online') { send({ hello: 1 }); status('✅ متصل بالتلفزيون. حط المربع الزهر ع مكان الترجمة.'); }
+    if (s === 'online') { send({ hello: 1 }); sendCfg(false); status('✅ متصل بالتلفزيون. حط المربع الزهر ع مكان الترجمة.'); }
     else if (s === 'offline') status('❌ ما في اتصال، عم جرّب من جديد...');
   } });
   navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false })
