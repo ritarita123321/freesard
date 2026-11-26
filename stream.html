@@ -49,6 +49,7 @@
     <div class="row"><label>الشكل</label><select id="tvStyle"><option value="0">1. Glass غامق</option><option value="1">2. Glass فاتح</option><option value="2">3. عادي (أسود)</option><option value="3">4. بلا خلفية</option><option value="4">5. أسود شفاف</option><option value="5">6. زهر GTA</option><option value="6">7. نيون</option><option value="7">8. أبيض</option><option value="8">9. شريط عريض</option><option value="9">10. غروب Vice City</option></select></div>
     <div class="row"><label>مكان تلقائي</label><input id="autoPos" type="checkbox" checked style="width:24px;height:24px"> <span class="hint">بيحط العربي فوق الإنكليزي لحالو</span></div>
     <div class="row"><label>المكان (من تحت)</label><input id="tvBottom" type="range" min="0" max="900" value="70"></div>
+    <div class="row"><label>مدة بقاء الترجمة</label><select id="hold"><option value="0">ما تضل (بتروح مع الإنكليزي)</option><option value="2" selected>2 ثانية زيادة</option><option value="4">4 ثواني زيادة</option><option value="6">6 ثواني زيادة</option><option value="10">10 ثواني زيادة</option></select></div>
     <div class="row"><label>حجم الخط</label><input id="tvSize" type="range" min="28" max="80" value="46"></div>
     <div class="hint">كل ما تغيّر شي، بتطلع ترجمة تجربة ع التلفزيون لتشوف الشكل والمكان.</div>
   </details>
@@ -138,6 +139,7 @@ function translate(text) {
 }
 
 function sendCfg(test) { var o = { cfg: { style: +$('tvStyle').value, bottom: +$('tvBottom').value, size: +$('tvSize').value } }; if (test) o.t = 'هيك بتطلع الترجمة ع التلفزيون'; send(o); }
+(function () { var v = ls('fs_hold'); if (v) $('hold').value = v; $('hold').addEventListener('change', function () { ls('fs_hold', $('hold').value); }); })();
 ['tvStyle', 'tvBottom', 'tvSize'].forEach(function (k) {
   var v = ls('fs_' + k); if (v) $(k).value = v;
   $(k).addEventListener('input', function () { ls('fs_' + k, $(k).value); sendCfg(true); });
@@ -215,7 +217,7 @@ function tick() {
     var text = cleanText(good || '');
     var n = norm(text);
     if (!n) {
-      if (lastSent && Date.now() - lastSeen > 3500) { lastSent = ''; send({ t: '' }); $('ar').textContent = '…'; }
+      if (lastSent && Date.now() - lastSeen > 1500 + (+$('hold').value) * 1000) { lastSent = ''; send({ t: '' }); $('ar').textContent = '…'; }
       return;
     }
     lastSeen = Date.now();
