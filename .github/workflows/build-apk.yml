@@ -37,8 +37,8 @@ jobs:
                   applicationId = "com.fawaz.gta6"
                   minSdk = 24
                   targetSdk = 34
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 3
+                  versionName = "1.2"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -63,6 +63,7 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
               <queries>
+                  <package android:name="io.github.yazanj082.momiji" />
                   <package android:name="com.playstation.remoteplay" />
               </queries>
 
@@ -169,6 +170,7 @@ jobs:
               private var lastSeen = 0L
               private var shown = false
               @Volatile private var seq = 0
+              @Volatile private var paused = false
 
               override fun onBind(intent: Intent?): IBinder? = null
 
@@ -187,7 +189,18 @@ jobs:
                   }
                   if (data == null) { stopSelf(); return START_NOT_STICKY }
 
-                  mqtt.start()
+                  mqtt.start("freesard/ctl/$code") { _, text ->
+                      try {
+                          val o = JSONObject(text)
+                          main.post {
+                              if (o.has("pm")) posMode = o.getString("pm")
+                              if (o.has("hold")) holdMs = o.getLong("hold")
+                              if (o.has("top")) topFrac = o.getDouble("top").toFloat()
+                              if (o.has("on")) paused = !o.getBoolean("on")
+                              status = if (paused) "⏸ الترجمة موقّفة من الموقع" else "✅ شغّال (الإعدادات من الموقع)"
+                          }
+                      } catch (_: Exception) {}
+                  }
                   setupTranslator()
 
                   val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -203,7 +216,7 @@ jobs:
                       DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader!!.surface, null, handler
                   )
                   running = true
-                  status = "✅ شغّال. افتح PS Remote Play والعب"
+                  status = "✅ شغّال. افتح Momiji والعب"
                   handler.postDelayed(loop, 600)
                   handler.postDelayed(pinger, 30000)
                   main.postDelayed({ publish(JSONObject().put("hello", 1)) }, 2500)
@@ -238,7 +251,7 @@ jobs:
               private val loop = object : Runnable {
                   override fun run() {
                       if (!running) return
-                      if (!busy) grabAndRead()
+                      if (!busy && !paused) grabAndRead()
                       handler.postDelayed(this, 250)
                   }
               }
@@ -264,10 +277,10 @@ jobs:
                   image.close()
                   if (isBlack(bmp)) {
                       blackCount++
-                      if (blackCount == 12) status = "⚠️ الصورة سودا: Remote Play مانع التسجيل. جرّب تطفي وتشغّل أو استعمل نسخة الكمبيوتر"
+                      if (blackCount == 12) status = "⚠️ الصورة سودا: البث مانع التسجيل. العب من Momiji مش من تطبيق Sony"
                       bmp.recycle(); return
                   }
-                  if (blackCount >= 12) status = "✅ شغّال. افتح PS Remote Play والعب"
+                  if (blackCount >= 12) status = "✅ شغّال. افتح Momiji والعب"
                   blackCount = 0
                   busy = true
                   recognizer.process(InputImage.fromBitmap(bmp, 0))
@@ -343,7 +356,7 @@ jobs:
                       if (mySeq != seq) return@translate
                       lastAr = ar
                       shown = true
-                      val o = JSONObject().put("t", ar).put("pm", posMode)
+                      val o = JSONObject().put("t", ar).put("pm", posMode).put("en", text)
                       if (posMode != "off") o.put("pos", pos)
                       publish(o)
                   }
@@ -374,7 +387,7 @@ jobs:
                   translator = t
                   status = "⏳ عم نزّل موديل الترجمة (أول مرة بس)..."
                   t.downloadModelIfNeeded(DownloadConditions.Builder().build())
-                      .addOnSuccessListener { translatorReady = true; if (running) status = "✅ شغّال. افتح PS Remote Play والعب" }
+                      .addOnSuccessListener { translatorReady = true; if (running) status = "✅ شغّال. افتح Momiji والعب" }
                       .addOnFailureListener { translatorReady = false }
               }
 
@@ -475,6 +488,8 @@ jobs:
           import android.widget.EditText
           import android.widget.LinearLayout
           import android.widget.ScrollView
+          import android.widget.SeekBar
+          import org.json.JSONObject
           import android.widget.Spinner
           import android.widget.TextView
           import android.widget.Toast
@@ -489,6 +504,20 @@ jobs:
               private lateinit var statusTv: TextView
               private lateinit var lastTv: TextView
               private val ui = Handler(Looper.getMainLooper())
+              private val mqtt = MultiMqtt()
+              private lateinit var styleSp: Spinner
+              private val bars = HashMap<String, SeekBar>()
+              private var cfgReady = false
+              private val styleNames = arrayOf("1. Glass غامق", "2. Glass فاتح", "3. عادي (أسود)", "4. بلا خلفية", "5. أسود شفاف",
+                  "6. زهر GTA", "7. نيون", "8. أبيض", "9. شريط عريض", "10. غروب Vice City")
+              // key, label, min, max, default
+              private val sliders = arrayOf(
+                  arrayOf("bottom", "المكان (من تحت)", 0, 900, 70),
+                  arrayOf("size", "حجم الخط", 28, 80, 46),
+                  arrayOf("bgw", "عرض الخلفية", 0, 1800, 900),
+                  arrayOf("pad", "سماكة الخلفية", 0, 60, 16),
+                  arrayOf("x", "المكان (يمين/شمال)", -800, 800, 0)
+              )
 
               private val pmVals = arrayOf("above", "below", "cover", "off")
               private val pmNames = arrayOf("فوق النص الأصلي", "تحت النص الأصلي", "مكان النص (يغطّيه)", "ثابت تحت الشاشة")
@@ -541,17 +570,48 @@ jobs:
                   topSp = spinner(topNames, prefs.getInt("top", 0)); root.addView(topSp)
 
                   val start = button("▶ شغّل الترجمة", pink) { begin() }
-                  val openRp = button("🎮 افتح PS Remote Play", Color.parseColor("#2F6BFF")) { openRemotePlay() }
+                  val openRp = button("🎮 افتح البث (Momiji)", Color.parseColor("#2F6BFF")) { openRemotePlay() }
                   val stop = button("⏹ وقّف", Color.parseColor("#555555")) {
                       stopService(Intent(this, CaptureService::class.java))
                   }
                   root.addView(start); root.addView(openRp); root.addView(stop)
 
+                  root.addView(TextView(this).apply {
+                      text = "🎨 شكل الترجمة عالتلفزيون"; textSize = 20f; setTypeface(Typeface.DEFAULT_BOLD)
+                      setTextColor(pink); setPadding(0, dp(22), 0, 0)
+                  })
+                  root.addView(label("الشكل:"))
+                  styleSp = spinner(styleNames, prefs.getInt("style", 0)); root.addView(styleSp)
+                  styleSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                      override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) = cfgChanged()
+                      override fun onNothingSelected(p: AdapterView<*>?) {}
+                  }
+                  for (sl in sliders) {
+                      val key = sl[0] as String; val min = sl[2] as Int; val max = sl[3] as Int; val def = sl[4] as Int
+                      root.addView(label(sl[1] as String))
+                      val sb = SeekBar(this).apply {
+                          this.max = max - min
+                          progress = prefs.getInt("cfg_" + key, def) - min
+                          setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                              override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) cfgChanged() }
+                              override fun onStartTrackingTouch(s: SeekBar?) {}
+                              override fun onStopTrackingTouch(s: SeekBar?) {}
+                          })
+                      }
+                      bars[key] = sb; root.addView(sb)
+                  }
+                  root.addView(button("👁 جرّب الشكل عالتلفزيون", Color.parseColor("#7B2FF7")) { sendCfg(true) })
+                  root.addView(button("↺ رجّع الشكل الأصلي", Color.parseColor("#444444")) {
+                      styleSp.setSelection(0)
+                      for (sl in sliders) bars[sl[0] as String]!!.progress = (sl[4] as Int) - (sl[2] as Int)
+                      sendCfg(true)
+                  })
+
                   statusTv = TextView(this).apply { setTextColor(orange); textSize = 15f; setPadding(0, dp(12), 0, 0) }
                   lastTv = TextView(this).apply { setTextColor(Color.WHITE); textSize = 14f; setPadding(0, dp(6), 0, 0) }
                   root.addView(statusTv); root.addView(lastTv)
 
-                  root.addView(label("الطريقة: كبس شغّل ← وافق عالتسجيل (اختار \"الشاشة كلها\") ← افتح Remote Play والعب. الترجمة بتطلع عالتلفزيون."))
+                  root.addView(label("الطريقة: كبس شغّل ← وافق عالتسجيل (اختار \"الشاشة كلها\") ← افتح Momiji (شاشة كاملة) والعب. الترجمة بتطلع عالتلفزيون."))
 
                   setContentView(ScrollView(this).apply { addView(root); isFillViewport = true })
 
@@ -560,6 +620,33 @@ jobs:
                       requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
                   }
                   ui.post(refresher)
+                  mqtt.start()
+                  ui.postDelayed({ cfgReady = true }, 800)
+              }
+
+              private fun value(key: String): Int {
+                  val sl = sliders.first { it[0] == key }
+                  return bars[key]!!.progress + (sl[2] as Int)
+              }
+
+              private val cfgSender = Runnable { sendCfg(true) }
+              private fun cfgChanged() {
+                  if (!cfgReady) return
+                  ui.removeCallbacks(cfgSender); ui.postDelayed(cfgSender, 350)
+              }
+
+              private fun sendCfg(test: Boolean) {
+                  val code = codeEt.text.toString().trim()
+                  val ed = getSharedPreferences("fawaz", MODE_PRIVATE).edit().putInt("style", styleSp.selectedItemPosition)
+                  for (sl in sliders) ed.putInt("cfg_" + sl[0], value(sl[0] as String))
+                  ed.apply()
+                  if (!mqtt.anyReady()) { Toast.makeText(this, "عم يتّصل... جرّب كمان شوي", Toast.LENGTH_SHORT).show(); return }
+                  val cfg = JSONObject().put("style", styleSp.selectedItemPosition).put("bottom", value("bottom"))
+                      .put("size", value("size")).put("bgw", value("bgw")).put("pad", value("pad")).put("x", -value("x"))
+                  val o = JSONObject().put("cfg", cfg)
+                  if (test) o.put("t", "هيك بتطلع الترجمة ع التلفزيون")
+                  o.put("id", java.lang.Long.toString(System.currentTimeMillis(), 36) + (Math.random() * 1e6).toInt())
+                  mqtt.publish("freesard/v1/$code", o.toString())
               }
 
               private val refresher = object : Runnable {
@@ -606,9 +693,10 @@ jobs:
               }
 
               private fun openRemotePlay() {
-                  val i = packageManager.getLaunchIntentForPackage("com.playstation.remoteplay")
+                  val i = packageManager.getLaunchIntentForPackage("io.github.yazanj082.momiji")
+                      ?: packageManager.getLaunchIntentForPackage("com.playstation.remoteplay")
                   if (i != null) startActivity(i)
-                  else Toast.makeText(this, "PS Remote Play مش منزّل عالتلفون", Toast.LENGTH_LONG).show()
+                  else Toast.makeText(this, "Momiji مش منزّل عالتلفون", Toast.LENGTH_LONG).show()
               }
 
               private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -635,7 +723,7 @@ jobs:
                   setOnClickListener { on() }
               }
 
-              override fun onDestroy() { ui.removeCallbacks(refresher); super.onDestroy() }
+              override fun onDestroy() { ui.removeCallbacksAndMessages(null); mqtt.close(); super.onDestroy() }
           }
           FAWAZ_EOF_3
           mkdir -p app/src/main/java/com/fawaz/gta6
@@ -653,6 +741,8 @@ jobs:
 
           /** Minimal MQTT 3.1.1 (QoS 0, publish only) over WebSocket. Same protocol as the web pages and the TV app. */
           class MqttWs(private val url: String, private val client: OkHttpClient) {
+              @Volatile var subTopic: String? = null
+              @Volatile var onMsg: ((String, String) -> Unit)? = null
               @Volatile private var ws: WebSocket? = null
               @Volatile var ready = false
                   private set
@@ -669,7 +759,33 @@ jobs:
                       }
 
                       override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                          if (bytes.size > 0 && (bytes[0].toInt() and 0xF0) == 0x20) ready = true
+                          val a = bytes.toByteArray()
+                          var i = 0
+                          while (i + 1 < a.size) {
+                              val type = (a[i].toInt() and 0xF0) shr 4
+                              val qos = (a[i].toInt() shr 1) and 3
+                              var mult = 1; var len = 0; var j = i + 1; var d: Int
+                              do {
+                                  if (j >= a.size) return
+                                  d = a[j++].toInt() and 255
+                                  len += (d and 127) * mult; mult *= 128
+                              } while (d and 128 != 0)
+                              if (j + len > a.size) return
+                              if (type == 2) {
+                                  ready = true
+                                  subTopic?.let { t ->
+                                      val body = byteArrayOf(0, 1) + str(t) + byteArrayOf(0)
+                                      webSocket.send(packet(0x82, body).toByteString())
+                                  }
+                              } else if (type == 3 && len >= 2) {
+                                  val tl = ((a[j].toInt() and 255) shl 8) or (a[j + 1].toInt() and 255)
+                                  val topic = String(a, j + 2, tl, Charsets.UTF_8)
+                                  val p = j + 2 + tl + (if (qos > 0) 2 else 0)
+                                  val text = String(a, p, j + len - p, Charsets.UTF_8)
+                                  try { onMsg?.invoke(topic, text) } catch (_: Exception) {}
+                              }
+                              i = j + len
+                          }
                       }
 
                       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = retry()
@@ -733,7 +849,9 @@ jobs:
               private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
               private val clients = brokers.map { MqttWs(it, http) }
 
-              fun start() = clients.forEach { it.connect() }
+              fun start(subTopic: String? = null, onMsg: ((String, String) -> Unit)? = null) = clients.forEach {
+                  it.subTopic = subTopic; it.onMsg = onMsg; it.connect()
+              }
               fun publish(topic: String, text: String) = clients.forEach { it.publish(topic, text) }
               fun anyReady() = clients.any { it.ready }
               fun ping() = clients.forEach { it.ping() }
@@ -774,7 +892,8 @@ jobs:
           path: fawaz-gta6.apk
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: apk-v${{ github.run_number }}
-          name: FAWAZ GTA6 Android ${{ github.run_number }}
+          tag_name: apk
+          name: FAWAZ GTA6 Android
           files: fawaz-gta6.apk
           make_latest: false
+          overwrite_files: true
