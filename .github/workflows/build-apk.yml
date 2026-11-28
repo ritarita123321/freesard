@@ -1,0 +1,780 @@
+name: Build FAWAZ APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Write project files
+        run: |
+          mkdir -p apk && cd apk
+          mkdir -p app
+          cat > app/build.gradle.kts <<'FAWAZ_EOF_0'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.fawaz.gta6"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.fawaz.gta6"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+
+          dependencies {
+              implementation("com.google.mlkit:text-recognition:16.0.1")
+              implementation("com.google.mlkit:translate:17.0.3")
+              implementation("com.squareup.okhttp3:okhttp:4.12.0")
+          }
+          FAWAZ_EOF_0
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'FAWAZ_EOF_1'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+              <queries>
+                  <package android:name="com.playstation.remoteplay" />
+              </queries>
+
+              <application
+                  android:label="FAWAZ GTA6"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="sensorLandscape"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".CaptureService"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjection" />
+              </application>
+          </manifest>
+          FAWAZ_EOF_1
+          mkdir -p app/src/main/java/com/fawaz/gta6
+          cat > app/src/main/java/com/fawaz/gta6/CaptureService.kt <<'FAWAZ_EOF_2'
+          package com.fawaz.gta6
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.graphics.Bitmap
+          import android.graphics.PixelFormat
+          import android.hardware.display.DisplayManager
+          import android.hardware.display.VirtualDisplay
+          import android.media.ImageReader
+          import android.media.projection.MediaProjection
+          import android.media.projection.MediaProjectionManager
+          import android.os.Build
+          import android.os.Handler
+          import android.os.HandlerThread
+          import android.os.IBinder
+          import android.os.Looper
+          import android.view.WindowManager
+          import com.google.mlkit.common.model.DownloadConditions
+          import com.google.mlkit.nl.translate.TranslateLanguage
+          import com.google.mlkit.nl.translate.Translation
+          import com.google.mlkit.nl.translate.Translator
+          import com.google.mlkit.nl.translate.TranslatorOptions
+          import com.google.mlkit.vision.common.InputImage
+          import com.google.mlkit.vision.text.TextRecognition
+          import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+          import okhttp3.Call
+          import okhttp3.Callback
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import okhttp3.Response
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.io.IOException
+          import java.net.URLEncoder
+          import kotlin.math.max
+          import kotlin.math.min
+
+          class CaptureService : Service() {
+
+              companion object {
+                  const val EXTRA_CODE = "code"
+                  const val EXTRA_RESULT = "result"
+                  const val EXTRA_DATA = "data"
+                  const val EXTRA_PM = "pm"
+                  const val EXTRA_HOLD = "hold"
+                  const val EXTRA_TOP = "top"
+                  @Volatile var status: String = ""
+                  @Volatile var lastEn: String = ""
+                  @Volatile var lastAr: String = ""
+                  @Volatile var running = false
+              }
+
+              private var projection: MediaProjection? = null
+              private var virtualDisplay: VirtualDisplay? = null
+              private var reader: ImageReader? = null
+              private val thread = HandlerThread("fawaz-capture").apply { start() }
+              private val handler = Handler(thread.looper)
+              private val main = Handler(Looper.getMainLooper())
+              private val mqtt = MultiMqtt()
+              private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+              private var translator: Translator? = null
+              @Volatile private var translatorReady = false
+              private val http = OkHttpClient()
+              private val cache = HashMap<String, String>()
+
+              private var code = ""
+              private var posMode = "above"
+              private var holdMs = 2000L
+              private var topFrac = 0.55f
+              private var w = 0
+              private var h = 0
+              @Volatile private var busy = false
+              private var lastSentNorm = ""
+              private var lastSeen = 0L
+              private var shown = false
+              @Volatile private var seq = 0
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (intent == null) return START_NOT_STICKY
+                  startInForeground()
+                  code = intent.getStringExtra(EXTRA_CODE) ?: ""
+                  posMode = intent.getStringExtra(EXTRA_PM) ?: "above"
+                  holdMs = intent.getLongExtra(EXTRA_HOLD, 2000L)
+                  topFrac = intent.getFloatExtra(EXTRA_TOP, 0.55f)
+                  val resultCode = intent.getIntExtra(EXTRA_RESULT, 0)
+                  val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+                      intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+                  } else {
+                      @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_DATA)
+                  }
+                  if (data == null) { stopSelf(); return START_NOT_STICKY }
+
+                  mqtt.start()
+                  setupTranslator()
+
+                  val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                  projection = mpm.getMediaProjection(resultCode, data)
+                  projection?.registerCallback(object : MediaProjection.Callback() {
+                      override fun onStop() { stopSelf() }
+                  }, handler)
+
+                  computeSize()
+                  reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+                  virtualDisplay = projection?.createVirtualDisplay(
+                      "fawaz", w, h, resources.displayMetrics.densityDpi,
+                      DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader!!.surface, null, handler
+                  )
+                  running = true
+                  status = "✅ شغّال. افتح PS Remote Play والعب"
+                  handler.postDelayed(loop, 600)
+                  handler.postDelayed(pinger, 30000)
+                  main.postDelayed({ publish(JSONObject().put("hello", 1)) }, 2500)
+                  return START_NOT_STICKY
+              }
+
+              private fun computeSize() {
+                  val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  var sw: Int
+                  var sh: Int
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      val b = wm.maximumWindowMetrics.bounds
+                      sw = b.width(); sh = b.height()
+                  } else {
+                      val dm = resources.displayMetrics
+                      sw = dm.widthPixels; sh = dm.heightPixels
+                  }
+                  val big = max(sw, sh)
+                  val small = min(sw, sh)
+                  val scale = min(1f, 1600f / big)
+                  w = (big * scale).toInt() / 2 * 2
+                  h = (small * scale).toInt() / 2 * 2
+              }
+
+              private val pinger = object : Runnable {
+                  override fun run() {
+                      mqtt.ping()
+                      handler.postDelayed(this, 30000)
+                  }
+              }
+
+              private val loop = object : Runnable {
+                  override fun run() {
+                      if (!running) return
+                      if (!busy) grabAndRead()
+                      handler.postDelayed(this, 250)
+                  }
+              }
+
+              private fun grabAndRead() {
+                  val image = try { reader?.acquireLatestImage() } catch (e: Exception) { null } ?: return
+                  val bmp: Bitmap
+                  try {
+                      val plane = image.planes[0]
+                      val pixelStride = plane.pixelStride
+                      val rowPadding = plane.rowStride - pixelStride * image.width
+                      val full = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+                      full.copyPixelsFromBuffer(plane.buffer)
+                      val top = (image.height * topFrac).toInt()
+                      bmp = Bitmap.createBitmap(full, 0, top, image.width, image.height - top)
+                      if (bmp != full) full.recycle()
+                  } catch (e: Exception) {
+                      image.close(); return
+                  }
+                  val frameW = image.width
+                  val frameH = image.height
+                  val offsetY = (frameH * topFrac).toInt()
+                  image.close()
+                  if (isBlack(bmp)) {
+                      blackCount++
+                      if (blackCount == 12) status = "⚠️ الصورة سودا: Remote Play مانع التسجيل. جرّب تطفي وتشغّل أو استعمل نسخة الكمبيوتر"
+                      bmp.recycle(); return
+                  }
+                  if (blackCount >= 12) status = "✅ شغّال. افتح PS Remote Play والعب"
+                  blackCount = 0
+                  busy = true
+                  recognizer.process(InputImage.fromBitmap(bmp, 0))
+                      .addOnSuccessListener { result ->
+                          val lines = ArrayList<com.google.mlkit.vision.text.Text.Line>()
+                          for (block in result.textBlocks) for (line in block.lines) {
+                              if (isText(line.text)) lines.add(line)
+                          }
+                          lines.sortBy { it.boundingBox?.top ?: 0 }
+                          handleLines(lines, frameW, frameH, offsetY)
+                      }
+                      .addOnCompleteListener {
+                          bmp.recycle()
+                          busy = false
+                      }
+              }
+
+              private var blackCount = 0
+              private fun isBlack(b: Bitmap): Boolean {
+                  var bright = 0
+                  val sx = max(1, b.width / 24); val sy = max(1, b.height / 12)
+                  var y = 0
+                  while (y < b.height) { var x = 0
+                      while (x < b.width) { val c = b.getPixel(x, y)
+                          if (((c shr 16) and 255) + ((c shr 8) and 255) + (c and 255) > 60) bright++
+                          x += sx }
+                      y += sy }
+                  return bright < 3
+              }
+
+              private fun isText(s: String): Boolean {
+                  val letters = s.count { it.isLetter() && it.code < 128 }
+                  val lower = s.count { it in 'a'..'z' }
+                  val words = s.split(' ').count { w -> w.count { it.isLetter() } >= 2 }
+                  return letters >= 4 && lower >= 2 && words >= 2 && letters.toFloat() / max(1, s.length) > 0.6f
+              }
+
+              private fun handleLines(lines: List<com.google.mlkit.vision.text.Text.Line>, fw: Int, fh: Int, offY: Int) {
+                  val now = System.currentTimeMillis()
+                  if (lines.isEmpty()) {
+                      if (shown && now - lastSeen > 900 + holdMs) {
+                          shown = false
+                          lastSentNorm = ""
+                          publish(JSONObject().put("t", ""))
+                          lastAr = ""
+                      }
+                      return
+                  }
+                  lastSeen = now
+                  val text = lines.joinToString(" ") { it.text.trim() }
+                  val norm = text.lowercase().replace(Regex("[^a-z0-9 ]"), "").replace(Regex("\\s+"), " ").trim()
+                  if (norm.isEmpty() || similarity(norm, lastSentNorm) > 0.8) return
+                  lastSentNorm = norm
+                  lastEn = text
+
+                  var top = Int.MAX_VALUE; var bottom = 0; var left = Int.MAX_VALUE; var right = 0
+                  for (l in lines) {
+                      val b = l.boundingBox ?: continue
+                      top = min(top, b.top + offY); bottom = max(bottom, b.bottom + offY)
+                      left = min(left, b.left); right = max(right, b.right)
+                  }
+                  // Map to the 16:9 game picture inside the phone screen (Remote Play leaves side bars on wide phones).
+                  var vx = 0f; var vy = 0f; var vw = fw.toFloat(); var vh = fh.toFloat()
+                  val aspect = fw.toFloat() / fh
+                  if (aspect > 16f / 9f) { vw = fh * 16f / 9f; vx = (fw - vw) / 2f }
+                  else if (aspect < 16f / 9f) { vh = fw * 9f / 16f; vy = (fh - vh) / 2f }
+                  fun cx(x: Int) = ((x - vx) / vw).coerceIn(0f, 1f).toDouble()
+                  fun cy(y: Int) = ((y - vy) / vh).coerceIn(0f, 1f).toDouble()
+                  val pos = JSONArray().put(cy(top)).put(cy(bottom)).put(cx(left)).put(cx(right))
+
+                  val mySeq = ++seq
+                  translate(text) { ar ->
+                      if (mySeq != seq) return@translate
+                      lastAr = ar
+                      shown = true
+                      val o = JSONObject().put("t", ar).put("pm", posMode)
+                      if (posMode != "off") o.put("pos", pos)
+                      publish(o)
+                  }
+              }
+
+              private fun similarity(a: String, b: String): Double {
+                  if (a.isEmpty() || b.isEmpty()) return 0.0
+                  if (a == b) return 1.0
+                  var prev = IntArray(b.length + 1) { it }
+                  for (i in 1..a.length) {
+                      val cur = IntArray(b.length + 1)
+                      cur[0] = i
+                      for (j in 1..b.length) {
+                          cur[j] = min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+                      }
+                      prev = cur
+                  }
+                  return 1.0 - prev[b.length].toDouble() / max(a.length, b.length)
+              }
+
+              private fun setupTranslator() {
+                  val t = Translation.getClient(
+                      TranslatorOptions.Builder()
+                          .setSourceLanguage(TranslateLanguage.ENGLISH)
+                          .setTargetLanguage(TranslateLanguage.ARABIC)
+                          .build()
+                  )
+                  translator = t
+                  status = "⏳ عم نزّل موديل الترجمة (أول مرة بس)..."
+                  t.downloadModelIfNeeded(DownloadConditions.Builder().build())
+                      .addOnSuccessListener { translatorReady = true; if (running) status = "✅ شغّال. افتح PS Remote Play والعب" }
+                      .addOnFailureListener { translatorReady = false }
+              }
+
+              private fun translate(text: String, done: (String) -> Unit) {
+                  cache[text]?.let { done(it); return }
+                  val t = translator
+                  if (translatorReady && t != null) {
+                      t.translate(text)
+                          .addOnSuccessListener { ar -> cache[text] = ar; done(ar) }
+                          .addOnFailureListener { viaGoogle(text, done) }
+                  } else {
+                      viaGoogle(text, done)
+                  }
+              }
+
+              private fun viaGoogle(text: String, done: (String) -> Unit) {
+                  val url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q=" +
+                      URLEncoder.encode(text, "UTF-8")
+                  http.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
+                      override fun onFailure(call: Call, e: IOException) {}
+                      override fun onResponse(call: Call, response: Response) {
+                          response.use {
+                              try {
+                                  val arr = JSONArray(it.body?.string() ?: return).getJSONArray(0)
+                                  val sb = StringBuilder()
+                                  for (i in 0 until arr.length()) sb.append(arr.getJSONArray(i).getString(0))
+                                  val ar = sb.toString()
+                                  main.post { cache[text] = ar; done(ar) }
+                              } catch (_: Exception) {}
+                          }
+                      }
+                  })
+              }
+
+              private fun publish(o: JSONObject) {
+                  o.put("id", java.lang.Long.toString(System.currentTimeMillis(), 36) + (Math.random() * 1e6).toInt())
+                  mqtt.publish("freesard/v1/$code", o.toString())
+              }
+
+              private fun startInForeground() {
+                  val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                  val builder = if (Build.VERSION.SDK_INT >= 26) {
+                      nm.createNotificationChannel(NotificationChannel("fawaz", "FAWAZ", NotificationManager.IMPORTANCE_LOW))
+                      Notification.Builder(this, "fawaz")
+                  } else {
+                      @Suppress("DEPRECATION") Notification.Builder(this)
+                  }
+                  val n = builder
+                      .setContentTitle("FAWAZ GTA6")
+                      .setContentText("عم يترجم GTA 6 للعربي")
+                      .setSmallIcon(android.R.drawable.ic_menu_view)
+                      .setOngoing(true)
+                      .build()
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+                  } else {
+                      startForeground(1, n)
+                  }
+              }
+
+              override fun onDestroy() {
+                  running = false
+                  status = "⏹ وقف"
+                  handler.removeCallbacksAndMessages(null)
+                  try { publish(JSONObject().put("t", "")) } catch (_: Exception) {}
+                  handler.postDelayed({ mqtt.close() }, 300)
+                  virtualDisplay?.release()
+                  reader?.close()
+                  projection?.stop()
+                  translator?.close()
+                  recognizer.close()
+                  super.onDestroy()
+              }
+          }
+          FAWAZ_EOF_2
+          mkdir -p app/src/main/java/com/fawaz/gta6
+          cat > app/src/main/java/com/fawaz/gta6/MainActivity.kt <<'FAWAZ_EOF_3'
+          package com.fawaz.gta6
+
+          import android.Manifest
+          import android.app.Activity
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.media.projection.MediaProjectionManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.AdapterView
+          import android.widget.ArrayAdapter
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.Spinner
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class MainActivity : Activity() {
+
+              private val REQ = 77
+              private lateinit var codeEt: EditText
+              private lateinit var pmSp: Spinner
+              private lateinit var holdSp: Spinner
+              private lateinit var topSp: Spinner
+              private lateinit var statusTv: TextView
+              private lateinit var lastTv: TextView
+              private val ui = Handler(Looper.getMainLooper())
+
+              private val pmVals = arrayOf("above", "below", "cover", "off")
+              private val pmNames = arrayOf("فوق النص الأصلي", "تحت النص الأصلي", "مكان النص (يغطّيه)", "ثابت تحت الشاشة")
+              private val holdVals = longArrayOf(1000, 2000, 3000, 5000)
+              private val holdNames = arrayOf("ثانية", "ثانيتين", "3 ثواني", "5 ثواني")
+              private val topVals = floatArrayOf(0.55f, 0.4f, 0.0f)
+              private val topNames = arrayOf("تحت الشاشة بس (أسرع)", "النص التحتاني الأكبر", "كل الشاشة")
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val prefs = getSharedPreferences("fawaz", MODE_PRIVATE)
+                  val pink = Color.parseColor("#FF4FA3")
+                  val orange = Color.parseColor("#FFB347")
+
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(20), dp(16), dp(20), dp(16))
+                      background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                          intArrayOf(Color.parseColor("#1A0B2E"), Color.parseColor("#3B0F45"), Color.parseColor("#0B1A3A")))
+                      layoutDirection = View.LAYOUT_DIRECTION_RTL
+                  }
+                  val title = TextView(this).apply {
+                      text = "FAWAZ GTA6"
+                      textSize = 32f
+                      setTypeface(Typeface.DEFAULT_BOLD, Typeface.BOLD_ITALIC)
+                      setTextColor(pink)
+                      gravity = Gravity.CENTER
+                      setShadowLayer(18f, 0f, 0f, orange)
+                  }
+                  val sub = TextView(this).apply {
+                      text = "نسخة Remote Play — ترجمة عربي عالتلفزيون"
+                      setTextColor(Color.WHITE); gravity = Gravity.CENTER; textSize = 14f
+                  }
+                  root.addView(title); root.addView(sub)
+
+                  root.addView(label("كود التلفزيون (يلّي ظاهر بتطبيق Fawaz GTA6 عالتلفزيون):"))
+                  codeEt = EditText(this).apply {
+                      inputType = InputType.TYPE_CLASS_NUMBER
+                      setText(prefs.getString("code", "905007"))
+                      setTextColor(Color.WHITE); textSize = 22f; gravity = Gravity.CENTER
+                      background = box(Color.parseColor("#33FFFFFF"))
+                  }
+                  root.addView(codeEt)
+
+                  root.addView(label("مكان الترجمة:"))
+                  pmSp = spinner(pmNames, prefs.getInt("pm", 0)); root.addView(pmSp)
+                  root.addView(label("قدّيش تضل الترجمة بعد ما يختفي النص:"))
+                  holdSp = spinner(holdNames, prefs.getInt("hold", 1)); root.addView(holdSp)
+                  root.addView(label("وين يدوّر عالنص:"))
+                  topSp = spinner(topNames, prefs.getInt("top", 0)); root.addView(topSp)
+
+                  val start = button("▶ شغّل الترجمة", pink) { begin() }
+                  val openRp = button("🎮 افتح PS Remote Play", Color.parseColor("#2F6BFF")) { openRemotePlay() }
+                  val stop = button("⏹ وقّف", Color.parseColor("#555555")) {
+                      stopService(Intent(this, CaptureService::class.java))
+                  }
+                  root.addView(start); root.addView(openRp); root.addView(stop)
+
+                  statusTv = TextView(this).apply { setTextColor(orange); textSize = 15f; setPadding(0, dp(12), 0, 0) }
+                  lastTv = TextView(this).apply { setTextColor(Color.WHITE); textSize = 14f; setPadding(0, dp(6), 0, 0) }
+                  root.addView(statusTv); root.addView(lastTv)
+
+                  root.addView(label("الطريقة: كبس شغّل ← وافق عالتسجيل (اختار \"الشاشة كلها\") ← افتح Remote Play والعب. الترجمة بتطلع عالتلفزيون."))
+
+                  setContentView(ScrollView(this).apply { addView(root); isFillViewport = true })
+
+                  if (Build.VERSION.SDK_INT >= 33 &&
+                      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
+                  }
+                  ui.post(refresher)
+              }
+
+              private val refresher = object : Runnable {
+                  override fun run() {
+                      statusTv.text = if (CaptureService.running || CaptureService.status.isNotEmpty())
+                          CaptureService.status else "جاهز. كبس شغّل الترجمة."
+                      lastTv.text = if (CaptureService.lastEn.isNotEmpty())
+                          "EN: ${CaptureService.lastEn}\nAR: ${CaptureService.lastAr}" else ""
+                      ui.postDelayed(this, 500)
+                  }
+              }
+
+              private fun begin() {
+                  val code = codeEt.text.toString().trim()
+                  if (code.length < 4) { Toast.makeText(this, "حط كود التلفزيون", Toast.LENGTH_SHORT).show(); return }
+                  getSharedPreferences("fawaz", MODE_PRIVATE).edit()
+                      .putString("code", code)
+                      .putInt("pm", pmSp.selectedItemPosition)
+                      .putInt("hold", holdSp.selectedItemPosition)
+                      .putInt("top", topSp.selectedItemPosition)
+                      .apply()
+                  val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                  @Suppress("DEPRECATION")
+                  startActivityForResult(mpm.createScreenCaptureIntent(), REQ)
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  @Suppress("DEPRECATION")
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode != REQ) return
+                  if (resultCode != RESULT_OK || data == null) {
+                      Toast.makeText(this, "لازم توافق عالتسجيل", Toast.LENGTH_LONG).show(); return
+                  }
+                  val i = Intent(this, CaptureService::class.java)
+                      .putExtra(CaptureService.EXTRA_CODE, codeEt.text.toString().trim())
+                      .putExtra(CaptureService.EXTRA_PM, pmVals[pmSp.selectedItemPosition])
+                      .putExtra(CaptureService.EXTRA_HOLD, holdVals[holdSp.selectedItemPosition])
+                      .putExtra(CaptureService.EXTRA_TOP, topVals[topSp.selectedItemPosition])
+                      .putExtra(CaptureService.EXTRA_RESULT, resultCode)
+                      .putExtra(CaptureService.EXTRA_DATA, data)
+                  if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                  ui.postDelayed({ openRemotePlay() }, 1200)
+              }
+
+              private fun openRemotePlay() {
+                  val i = packageManager.getLaunchIntentForPackage("com.playstation.remoteplay")
+                  if (i != null) startActivity(i)
+                  else Toast.makeText(this, "PS Remote Play مش منزّل عالتلفون", Toast.LENGTH_LONG).show()
+              }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+              private fun box(c: Int) = GradientDrawable().apply { setColor(c); cornerRadius = dp(12).toFloat() }
+              private fun label(t: String) = TextView(this).apply {
+                  text = t; setTextColor(Color.parseColor("#DDDDDD")); textSize = 13f; setPadding(0, dp(12), 0, dp(4))
+              }
+              private fun spinner(items: Array<String>, sel: Int) = Spinner(this).apply {
+                  adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, items) {
+                      override fun getView(p: Int, v: View?, g: android.view.ViewGroup) =
+                          (super.getView(p, v, g) as TextView).apply { setTextColor(Color.WHITE); textSize = 16f }
+                  }.also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+                  setSelection(sel.coerceIn(0, items.size - 1))
+                  background = box(Color.parseColor("#33FFFFFF"))
+                  onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                      override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {}
+                      override fun onNothingSelected(p: AdapterView<*>?) {}
+                  }
+              }
+              private fun button(t: String, c: Int, on: () -> Unit) = Button(this).apply {
+                  text = t; setTextColor(Color.WHITE); textSize = 17f; isAllCaps = false
+                  background = box(c)
+                  layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(54)).apply { topMargin = dp(10) }
+                  setOnClickListener { on() }
+              }
+
+              override fun onDestroy() { ui.removeCallbacks(refresher); super.onDestroy() }
+          }
+          FAWAZ_EOF_3
+          mkdir -p app/src/main/java/com/fawaz/gta6
+          cat > app/src/main/java/com/fawaz/gta6/Mqtt.kt <<'FAWAZ_EOF_4'
+          package com.fawaz.gta6
+
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import okhttp3.Response
+          import okhttp3.WebSocket
+          import okhttp3.WebSocketListener
+          import okio.ByteString
+          import okio.ByteString.Companion.toByteString
+          import java.util.concurrent.TimeUnit
+
+          /** Minimal MQTT 3.1.1 (QoS 0, publish only) over WebSocket. Same protocol as the web pages and the TV app. */
+          class MqttWs(private val url: String, private val client: OkHttpClient) {
+              @Volatile private var ws: WebSocket? = null
+              @Volatile var ready = false
+                  private set
+              @Volatile private var closed = false
+              private val clientId = "fsa" + java.lang.Long.toString(System.nanoTime(), 36)
+
+              fun connect() {
+                  if (closed) return
+                  val req = Request.Builder().url(url).header("Sec-WebSocket-Protocol", "mqtt").build()
+                  ws = client.newWebSocket(req, object : WebSocketListener() {
+                      override fun onOpen(webSocket: WebSocket, response: Response) {
+                          val body = str("MQTT") + byteArrayOf(4, 2, 0, 60) + str(clientId)
+                          webSocket.send(packet(0x10, body).toByteString())
+                      }
+
+                      override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                          if (bytes.size > 0 && (bytes[0].toInt() and 0xF0) == 0x20) ready = true
+                      }
+
+                      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = retry()
+                      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = retry()
+                  })
+              }
+
+              private fun retry() {
+                  ready = false
+                  if (closed) return
+                  Thread {
+                      try { Thread.sleep(3000) } catch (_: InterruptedException) {}
+                      connect()
+                  }.start()
+              }
+
+              fun ping() {
+                  if (ready) ws?.send(byteArrayOf(0xC0.toByte(), 0).toByteString())
+              }
+
+              fun publish(topic: String, text: String): Boolean {
+                  if (!ready) return false
+                  val body = str(topic) + text.toByteArray(Charsets.UTF_8)
+                  return ws?.send(packet(0x30, body).toByteString()) ?: false
+              }
+
+              fun close() {
+                  closed = true
+                  ready = false
+                  ws?.close(1000, null)
+              }
+
+              companion object {
+                  fun str(s: String): ByteArray {
+                      val b = s.toByteArray(Charsets.UTF_8)
+                      return byteArrayOf((b.size shr 8).toByte(), (b.size and 255).toByte()) + b
+                  }
+
+                  fun packet(type: Int, body: ByteArray): ByteArray {
+                      val head = ArrayList<Byte>()
+                      head.add(type.toByte())
+                      var len = body.size
+                      do {
+                          var d = len % 128
+                          len /= 128
+                          if (len > 0) d = d or 128
+                          head.add(d.toByte())
+                      } while (len > 0)
+                      return head.toByteArray() + body
+                  }
+              }
+          }
+
+          /** Connects to all public brokers at once, so the phone and the TV always share at least one. */
+          class MultiMqtt {
+              private val brokers = listOf(
+                  "wss://broker.hivemq.com:8884/mqtt",
+                  "wss://broker.emqx.io:8084/mqtt",
+                  "wss://test.mosquitto.org:8081/mqtt"
+              )
+              private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+              private val clients = brokers.map { MqttWs(it, http) }
+
+              fun start() = clients.forEach { it.connect() }
+              fun publish(topic: String, text: String) = clients.forEach { it.publish(topic, text) }
+              fun anyReady() = clients.any { it.ready }
+              fun ping() = clients.forEach { it.ping() }
+              fun close() = clients.forEach { it.close() }
+          }
+          FAWAZ_EOF_4
+          cat > build.gradle.kts <<'FAWAZ_EOF_5'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          FAWAZ_EOF_5
+          cat > gradle.properties <<'FAWAZ_EOF_6'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          FAWAZ_EOF_6
+          cat > settings.gradle.kts <<'FAWAZ_EOF_7'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "FawazGTA6"
+          include(":app")
+          FAWAZ_EOF_7
+      - name: Build
+        working-directory: apk
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Rename
+        run: cp apk/app/build/outputs/apk/debug/app-debug.apk fawaz-gta6.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fawaz-gta6-apk
+          path: fawaz-gta6.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-v${{ github.run_number }}
+          name: FAWAZ GTA6 Android ${{ github.run_number }}
+          files: fawaz-gta6.apk
+          make_latest: false
